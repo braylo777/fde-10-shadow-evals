@@ -1,0 +1,6 @@
+{
+  // Static-assets-only Worker: serves web/ (no server code).
+  "name": "fde-10-shadow-evals",
+  "compatibility_date": "2026-11-10",
+  "assets": { "directory": "web" }
+}
