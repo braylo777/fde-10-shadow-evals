@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 description = "Golden sets from real logs, trajectory grading of a shadow agent, LLM-judge calibration and business-metric comparison with confidence intervals."
-repository = "https://github.com/braylo-ai/fde-10-shadow-evals"
+repository = "https://github.com/braylo777/fde-10-shadow-evals"
 
 [lib]
 crate-type = ["rlib", "cdylib"]
