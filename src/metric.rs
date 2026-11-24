@@ -56,6 +56,67 @@ pub fn two_prop_p(k1: f64, n1: f64, k2: f64, n2: f64) -> f64 {
     (y * (-(z * z) / 2.0).exp()).clamp(0.0, 1.0)
 }
 
+/// Exact two-sided McNemar test: `b` and `c` are the discordant pairs
+/// (shadow-only hits and production-only hits). Binomial(b+c, 0.5), computed in log space.
+pub fn mcnemar_p(b: u64, c: u64) -> f64 {
+    let n = b + c;
+    if n == 0 {
+        return 1.0;
+    }
+    let k = b.min(c);
+    let mut lf = vec![0.0f64; n as usize + 1];
+    for i in 1..=n as usize {
+        lf[i] = lf[i - 1] + (i as f64).ln();
+    }
+    let ln_fact = |x: u64| lf[x as usize];
+    let ln_n = ln_fact(n);
+    let tail: f64 = (0..=k)
+        .map(|i| (ln_n - ln_fact(i) - ln_fact(n - i) - n as f64 * std::f64::consts::LN_2).exp())
+        .sum();
+    (2.0 * tail).min(1.0)
+}
+
+/// Paired comparison: the same tickets replayed through production and shadow, joined on
+/// `key`. Only pairs where the ticket is in the metric's denominator on both sides count.
+fn paired(m: &Value, prod: &[Value], shadow: &[Value], key: &str) -> Result<Value, String> {
+    use std::collections::BTreeMap;
+    let index: BTreeMap<String, &Value> = shadow
+        .iter()
+        .filter_map(|r| r.get(key).map(|k| (k.to_string(), r)))
+        .collect();
+    if index.len() != shadow.len() {
+        return Err(format!("shadow records have duplicate or missing `{key}`"));
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    let (mut both, mut b, mut c, mut n, mut unmatched) = (0u64, 0u64, 0u64, 0u64, 0u64);
+    for p in prod {
+        if let Some(k) = p.get(key) {
+            if !seen.insert(k.to_string()) {
+                return Err(format!("duplicate production `{key}` {k}"));
+            }
+        }
+        let Some(s) = p.get(key).and_then(|k| index.get(&k.to_string())) else {
+            unmatched += 1;
+            continue;
+        };
+        if !(matches(p, &m["denominator"]) && matches(s, &m["denominator"])) {
+            continue;
+        }
+        n += 1;
+        match (matches(p, &m["numerator"]), matches(s, &m["numerator"])) {
+            (true, true) => both += 1,
+            (false, true) => b += 1,
+            (true, false) => c += 1,
+            _ => {}
+        }
+    }
+    if n == 0 {
+        return Err("no matched pairs".into());
+    }
+    Ok(json!({"pairs": n, "unmatched": unmatched, "both_hit": both,
+        "shadow_only": b, "production_only": c, "p_value": r3(mcnemar_p(b, c))}))
+}
+
 fn eval(m: &Value, recs: &[Value]) -> (f64, f64) {
     let den: Vec<&Value> = recs
         .iter()
@@ -82,8 +143,22 @@ pub fn compare_op(i: &Value) -> Result<Value, String> {
             return Err(format!("metric {name}: empty denominator"));
         }
         let (p1, p2) = (k1 / n1, k2 / n2);
-        let pval = two_prop_p(k1, n1, k2, n2);
-        let better = if higher_better { p2 > p1 } else { p2 < p1 };
+        let pair = match i["paired_by"].as_str() {
+            Some(key) => Some(paired(m, prod, shadow, key).map_err(|e| format!("metric {name}: {e}"))?),
+            None => None,
+        };
+        let pval = match &pair {
+            Some(pr) => pr["p_value"].as_f64().unwrap_or(1.0),
+            None => two_prop_p(k1, n1, k2, n2),
+        };
+        let better = match &pair {
+            // Paired: direction comes from the discordant pairs.
+            Some(pr) => {
+                let (b, c) = (pr["shadow_only"].as_u64().unwrap_or(0), pr["production_only"].as_u64().unwrap_or(0));
+                if higher_better { b > c } else { b < c }
+            }
+            None => if higher_better { p2 > p1 } else { p2 < p1 },
+        };
         let significant = pval < 0.05;
         let verdict = match (significant, better) {
             (true, true) => "shadow better",
@@ -99,7 +174,9 @@ pub fn compare_op(i: &Value) -> Result<Value, String> {
         };
         rows.push(json!({"metric": name, "guardrail": m["guardrail"] == true,
             "production": {"rate": r3(p1), "n": n1, "ci95": ci(k1, n1)}, "shadow": {"rate": r3(p2), "n": n2, "ci95": ci(k2, n2)},
-            "delta": r3(p2 - p1), "p_value": r3(pval), "verdict": verdict}));
+            "delta": r3(p2 - p1), "p_value": r3(pval), "verdict": verdict,
+            "test": if pair.is_some() { "exact McNemar (paired)" } else { "two-proportion z (independent)" },
+            "paired": pair}));
     }
     let primary_better = rows
         .first()
@@ -128,5 +205,34 @@ mod tests {
         // z = 1.96 -> p ≈ 0.05
         let p = two_prop_p(400.0, 1000.0, 443.0, 1000.0);
         assert!(p > 0.04 && p < 0.06, "{p}");
+    }
+
+    #[test]
+    fn mcnemar_known_values() {
+        assert_eq!(mcnemar_p(0, 0), 1.0);
+        // b=10, c=0: 2 * 0.5^10
+        assert!((mcnemar_p(10, 0) - 2.0 / 1024.0).abs() < 1e-9);
+        assert!((mcnemar_p(5, 5) - 1.0).abs() < 1e-9);
+        assert!(mcnemar_p(300, 200) < 0.001);
+        assert!(mcnemar_p(400, 400) > 0.9);
+    }
+
+    #[test]
+    fn paired_detects_what_unpaired_misses() {
+        // 200 tickets: both resolve 140; shadow also fixes 12, breaks 1.
+        let mut prod = Vec::new();
+        let mut sh = Vec::new();
+        for i in 0..200 {
+            let base = i < 140;
+            prod.push(json!({"id": i, "resolved": base || (152..153).contains(&i)}));
+            sh.push(json!({"id": i, "resolved": base || (140..152).contains(&i)}));
+        }
+        let m = json!([{"name": "fcr", "numerator": [{"field": "resolved", "eq": true}], "denominator": []}]);
+        let u = compare_op(&json!({"metrics": m, "production": prod, "shadow": sh})).unwrap();
+        let p = compare_op(&json!({"metrics": m, "production": prod, "shadow": sh, "paired_by": "id"})).unwrap();
+        assert_eq!(u["metrics"][0]["verdict"], "no significant difference");
+        assert_eq!(p["metrics"][0]["verdict"], "shadow better");
+        assert_eq!(p["metrics"][0]["paired"]["shadow_only"], 12);
+        assert_eq!(p["metrics"][0]["paired"]["production_only"], 1);
     }
 }

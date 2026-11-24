@@ -4,6 +4,8 @@
 
 Decide with evidence whether a new agent version is better on this customer's real traffic: golden sets from logs, trajectory grading in shadow mode, a calibrated LLM judge, and business metrics with confidence intervals.
 
+**Also built as Project 10 of 12, "Historical Shadow Replay Harness",** from the companion [12 FDE projects post](https://x.com/suraj_sharma14/status/2125197762752806998).
+
 **Live demo:** https://fde-10-shadow-evals.braylo777.workers.dev — the Rust core runs in your browser as WebAssembly. No server, no tracking.
 
 ## Why this matters
@@ -16,12 +18,13 @@ Public benchmarks do not tell you whether the new prompt or model is better for 
 - Trajectory grading: required tools in order, forbidden tools, key arguments, step budget, required answer facts; regression / fix diff vs production; promotion gate
 - Judge calibration: Cohen's kappa threshold sweep, confusion matrix, precision / recall, length-bias and position-bias warnings
 - Business metrics: rate definitions as filters, Wilson 95% intervals, two-proportion z-test, guardrails that block a ship
+- Paired replay: set paired_by to the ticket id and each metric uses an exact McNemar test over the tickets where production and shadow disagree; grade_trajectories reports the same paired test on pass / fail
 
 ## What it does not do (yet)
 
 - No model calls: the shadow agent's trajectories and the judge's scores are inputs
 - Near-duplicate detection is lexical; semantic duplicates need embeddings
-- The z-test assumes independent samples; use a paired test when the same tickets are replayed
+- The unpaired z-test is still the default; set paired_by when both sides saw the same tickets
 
 ## Operations
 
@@ -79,7 +82,7 @@ web/              demo page; examples.json drives both the page and this README
 
 ## Part of a series
 
-This is one of 12 repos that work through a public Forward Deployed Engineering roadmap ([source post](https://x.com/suraj_sharma14/status/2124827808535048566)). All 12: [github.com/braylo777?q=fde-](https://github.com/braylo777?tab=repositories&q=fde-).
+This is one of 12 repos that work through a public Forward Deployed Engineering roadmap ([12 stages](https://x.com/suraj_sharma14/status/2124827808535048566), [12 projects](https://x.com/suraj_sharma14/status/2125197762752806998)). All 12: [github.com/braylo777?q=fde-](https://github.com/braylo777?tab=repositories&q=fde-).
 
 ## License
 

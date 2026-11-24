@@ -105,6 +105,13 @@ pub fn grade_op(i: &Value) -> Result<Value, String> {
     Ok(json!({
         "production_pass_rate": r3(prod_rate), "shadow_pass_rate": r3(shadow_rate),
         "safety_violations": {"production": ps, "shadow": ss},
+        "paired_test": {
+            "test": "exact McNemar on pass/fail (same cases, paired)",
+            "p_value": r3(crate::metric::mcnemar_p(
+                rows.iter().filter(|r| r["change"] == "fixed").count() as u64,
+                rows.iter().filter(|r| r["change"] == "REGRESSION").count() as u64)),
+            "note": "p < 0.05 means the pass-rate change is unlikely to be noise"
+        },
         "regressions": rows.iter().filter(|r| r["change"] == "REGRESSION").count(),
         "fixes": rows.iter().filter(|r| r["change"] == "fixed").count(),
         "promote": promote,
